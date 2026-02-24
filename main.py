@@ -1,17 +1,17 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
-import psycopg2
+import psycopg
 import os
 
 app = FastAPI()
 
 # =====================================================
-# CONEXIÓN A SUPABASE (PostgreSQL)
+# CONEXIÓN A SUPABASE (PostgreSQL - psycopg v3)
 # =====================================================
 
 def get_conn():
-    return psycopg2.connect(
+    return psycopg.connect(
         host=os.getenv("DB_HOST"),
         dbname=os.getenv("DB_NAME"),
         user=os.getenv("DB_USER"),
@@ -24,18 +24,17 @@ def get_conn():
 # =====================================================
 
 def crear_tabla():
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clientes (
-            nombre TEXT PRIMARY KEY,
-            membresia_activa BOOLEAN DEFAULT FALSE,
-            bloqueado BOOLEAN DEFAULT FALSE,
-            nivel TEXT DEFAULT 'basico'
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS clientes (
+                    nombre TEXT PRIMARY KEY,
+                    membresia_activa BOOLEAN DEFAULT FALSE,
+                    bloqueado BOOLEAN DEFAULT FALSE,
+                    nivel TEXT DEFAULT 'basico'
+                )
+            """)
+        conn.commit()
 
 crear_tabla()
 
@@ -44,14 +43,13 @@ crear_tabla()
 # =====================================================
 
 def validar_acceso(nombre: str):
-    conn = get_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT membresia_activa, bloqueado, nivel FROM clientes WHERE nombre=%s",
-        (nombre,)
-    )
-    fila = cursor.fetchone()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT membresia_activa, bloqueado, nivel FROM clientes WHERE nombre=%s",
+                (nombre,)
+            )
+            fila = cursor.fetchone()
 
     if not fila:
         return {"aprobado": False, "motivo": "Usuario no registrado"}
@@ -60,6 +58,7 @@ def validar_acceso(nombre: str):
 
     if bloqueado:
         return {"aprobado": False, "motivo": "Usuario bloqueado"}
+
     if not membresia_activa:
         return {"aprobado": False, "motivo": "Membresía inactiva"}
 
@@ -84,26 +83,24 @@ async def crear_usuario(data: dict):
     if not nombre:
         return {"creado": False, "error": "Debe enviar nombre"}
 
-    conn = get_conn()
-    cursor = conn.cursor()
+    with get_conn() as conn:
+        with conn.cursor() as cursor:
 
-    cursor.execute("SELECT nombre FROM clientes WHERE nombre=%s", (nombre,))
-    if cursor.fetchone():
-        conn.close()
-        return {"creado": False, "error": "El usuario ya existe"}
+            cursor.execute("SELECT nombre FROM clientes WHERE nombre=%s", (nombre,))
+            if cursor.fetchone():
+                return {"creado": False, "error": "El usuario ya existe"}
 
-    cursor.execute("""
-        INSERT INTO clientes (nombre, membresia_activa, bloqueado, nivel)
-        VALUES (%s, %s, %s, %s)
-    """, (
-        nombre,
-        data.get("membresia_activa", False),
-        data.get("bloqueado", False),
-        data.get("nivel", "basico")
-    ))
+            cursor.execute("""
+                INSERT INTO clientes (nombre, membresia_activa, bloqueado, nivel)
+                VALUES (%s, %s, %s, %s)
+            """, (
+                nombre,
+                data.get("membresia_activa", False),
+                data.get("bloqueado", False),
+                data.get("nivel", "basico")
+            ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
 
     return {"creado": True, "usuario": data}
 
@@ -124,9 +121,6 @@ async def validar(data: dict):
 async def recibir_mensaje(request: Request):
     form = await request.form()
     mensaje = form.get("Body")
-    numero = form.get("From")
-
-    print(f"Mensaje recibido de {numero}: {mensaje}")
 
     resp = MessagingResponse()
 
