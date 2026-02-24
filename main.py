@@ -1,33 +1,44 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from twilio.twiml.messaging_response import MessagingResponse
-import sqlite3
+import psycopg2
 import requests
 
 app = FastAPI()
 
 # =====================================================
-# BASE DE DATOS SQLITE
+# CONEXIÓN A SUPABASE (PostgreSQL)
 # =====================================================
 
-def crear_bd():
-    conn = sqlite3.connect("accesscheck.db")
+def get_conn():
+    return psycopg2.connect(
+        host="TU_HOST_SUPABASE",
+        dbname="TU_DB",
+        user="TU_USUARIO",
+        password="TU_PASSWORD",
+        port=5432
+    )
+
+# =====================================================
+# CREAR TABLA SI NO EXISTE
+# =====================================================
+
+def crear_tabla():
+    conn = get_conn()
     cursor = conn.cursor()
-    
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS clientes (
         nombre TEXT PRIMARY KEY,
         saldo REAL DEFAULT 0,
-        premium INTEGER DEFAULT 0,
-        deudas INTEGER DEFAULT 0,
-        baneado INTEGER DEFAULT 0
+        premium BOOLEAN DEFAULT FALSE,
+        deudas BOOLEAN DEFAULT FALSE,
+        baneado BOOLEAN DEFAULT FALSE
     )
     ''')
-    
     conn.commit()
     conn.close()
 
-crear_bd()
+crear_tabla()
 
 # =====================================================
 # HOME
@@ -44,32 +55,26 @@ def home():
 @app.post("/crear")
 async def crear_cliente(data: dict):
     nombre = data.get("nombre")
-
     if not nombre:
         return {"creado": False, "error": "Debe enviar nombre"}
 
-    conn = sqlite3.connect("accesscheck.db")
+    conn = get_conn()
     cursor = conn.cursor()
-
-    cursor.execute("SELECT nombre FROM clientes WHERE nombre=?", (nombre,))
+    cursor.execute("SELECT nombre FROM clientes WHERE nombre=%s", (nombre,))
     if cursor.fetchone():
         conn.close()
-        return JSONResponse(
-            status_code=200,
-            content={"creado": False, "error": "El cliente ya existe"}
-        )
+        return {"creado": False, "error": "El cliente ya existe"}
 
     cursor.execute('''
         INSERT INTO clientes (nombre, saldo, premium, deudas, baneado)
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s)
     ''', (
         nombre,
         data.get("saldo", 0),
-        int(data.get("premium", False)),
-        int(data.get("deudas", False)),
-        int(data.get("baneado", False))
+        data.get("premium", False),
+        data.get("deudas", False),
+        data.get("baneado", False)
     ))
-
     conn.commit()
     conn.close()
 
@@ -82,10 +87,9 @@ async def crear_cliente(data: dict):
 @app.post("/validar")
 async def validar_retiro(data: dict):
     nombre = data.get("nombre")
-
-    conn = sqlite3.connect("accesscheck.db")
+    conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT saldo, premium, deudas, baneado FROM clientes WHERE nombre=?", (nombre,))
+    cursor.execute("SELECT saldo, premium, deudas, baneado FROM clientes WHERE nombre=%s", (nombre,))
     fila = cursor.fetchone()
     conn.close()
 
@@ -93,9 +97,6 @@ async def validar_retiro(data: dict):
         return {"aprobado": False, "motivo": "Cliente no existe"}
 
     saldo, premium, deudas, baneado = fila
-    premium = bool(premium)
-    deudas = bool(deudas)
-    baneado = bool(baneado)
 
     if baneado:
         return {"aprobado": False, "motivo": "Cliente baneado"}
@@ -122,23 +123,18 @@ async def recibir_mensaje(request: Request):
 
     if mensaje.lower().startswith("validar"):
         partes = mensaje.split()
-
         if len(partes) < 2:
             resp.message("Debes escribir: validar TU_NOMBRE")
         else:
             nombre = partes[1]
-
-            # Llamamos a nuestra propia API
-            url = "https://acceso-api-2lxd.onrender.com/validar"
+            url = "https://TU_API/validar"  # Cambia por tu dominio
             data = {"nombre": nombre}
-
             try:
                 r = requests.post(url, json=data, timeout=5)
                 resultado = r.json()
                 texto = f"Aprobado: {resultado['aprobado']}\nMotivo: {resultado['motivo']}"
             except Exception as e:
                 texto = f"Error al validar: {e}"
-
             resp.message(texto)
     else:
         resp.message("Escribe: validar TU_NOMBRE")
