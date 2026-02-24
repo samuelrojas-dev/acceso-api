@@ -75,6 +75,9 @@ async def validar_retiro(data: dict):
 # WEBHOOK WHATSAPP (TWILIO)
 # =====================================================
 
+from twilio.twiml.messaging_response import MessagingResponse
+import requests
+
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
     form = await request.form()
@@ -83,32 +86,26 @@ async def recibir_mensaje(request: Request):
 
     print(f"Mensaje recibido de {numero}: {mensaje}")
 
-    respuesta = MessagingResponse()
+    resp = MessagingResponse()
 
-    # Si el usuario escribe "validar Samuel"
-    if mensaje and mensaje.lower().startswith("validar"):
+    if mensaje.lower().startswith("validar"):
         partes = mensaje.split()
 
         if len(partes) < 2:
-            respuesta.message("Debes escribir: validar NOMBRE")
+            resp.message("Debes escribir: validar TU_NOMBRE")
         else:
             nombre = partes[1]
 
-            if nombre not in clientes:
-                respuesta.message("Cliente no existe")
-            else:
-                cliente = clientes[nombre]
+            # Llamamos a nuestra propia API
+            url = "https://acceso-api-2lxd.onrender.com/validar"
+            data = {"nombre": nombre}
 
-                if cliente["baneado"]:
-                    respuesta.message("❌ Cliente baneado")
-                elif cliente["saldo"] <= 50:
-                    respuesta.message("❌ Saldo insuficiente")
-                elif cliente["deudas"] and not cliente["premium"]:
-                    respuesta.message("❌ Tiene deudas y no es premium")
-                else:
-                    respuesta.message("✅ Puede retirar dinero")
+            r = requests.post(url, json=data)
+            resultado = r.json()
 
+            texto = f"Aprobado: {resultado['aprobado']}\nMotivo: {resultado['motivo']}"
+            resp.message(texto)
     else:
-        respuesta.message("Escribe: validar TU_NOMBRE")
+        resp.message("Escribe: validar TU_NOMBRE")
 
-    return Response(content=str(respuesta), media_type="application/xml")
+    return PlainTextResponse(str(resp), media_type="application/xml")
