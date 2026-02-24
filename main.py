@@ -1,198 +1,79 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import sqlite3
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 app = FastAPI()
 
-# =========================
-# CREAR BASE DE DATOS
-# =========================
+# Base de datos en memoria (temporal)
+clientes = {}
 
-def crear_tabla():
-    conn = sqlite3.connect("clientes.db")
-    cursor = conn.cursor()
+# -----------------------------------
+# HOME
+# -----------------------------------
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS clientes (
-            telefono TEXT PRIMARY KEY,
-            activo BOOLEAN,
-            baneado BOOLEAN,
-            premium BOOLEAN,
-            vencido BOOLEAN
-        )
-    """)
+@app.get("/")
+def home():
+    return {"mensaje": "API AccessCheck funcionando correctamente"}
 
-    conn.commit()
-    conn.close()
-
-crear_tabla()
-
-# =========================
-# MODELO CREAR CLIENTE
-# =========================
-
-class ClienteCreate(BaseModel):
-    telefono: str
-    activo: bool
-    baneado: bool
-    premium: bool
-    vencido: bool
-
-# =========================
+# -----------------------------------
 # CREAR CLIENTE
-# =========================
+# -----------------------------------
 
-@app.post("/crear_cliente")
-def crear_cliente(cliente: ClienteCreate):
-    try:
-        conn = sqlite3.connect("clientes.db")
-        cursor = conn.cursor()
+@app.post("/crear")
+async def crear_cliente(data: dict):
+    nombre = data.get("nombre")
 
-        cursor.execute("""
-            INSERT INTO clientes (telefono, activo, baneado, premium, vencido)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            cliente.telefono,
-            cliente.activo,
-            cliente.baneado,
-            cliente.premium,
-            cliente.vencido
-        ))
+    if nombre in clientes:
+        return JSONResponse(
+            status_code=200,
+            content={"creado": False, "error": "El cliente ya existe"}
+        )
 
-        conn.commit()
-        conn.close()
-
-        return {
-            "creado": True,
-            "telefono": cliente.telefono
-        }
-
-    except sqlite3.IntegrityError:
-        return {
-            "creado": False,
-            "error": "El cliente ya existe"
-        }
-
-# =========================
-# ACTUALIZAR CLIENTE
-# =========================
-
-@app.put("/actualizar_cliente")
-def actualizar_cliente(
-    telefono: str,
-    activo: bool = None,
-    baneado: bool = None,
-    premium: bool = None,
-    vencido: bool = None
-):
-    conn = sqlite3.connect("clientes.db")
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM clientes WHERE telefono = ?", (telefono,))
-    cliente = cursor.fetchone()
-
-    if not cliente:
-        conn.close()
-        return {
-            "actualizado": False,
-            "error": "Cliente no existe"
-        }
-
-    if activo is not None:
-        cursor.execute("UPDATE clientes SET activo = ? WHERE telefono = ?", (activo, telefono))
-
-    if baneado is not None:
-        cursor.execute("UPDATE clientes SET baneado = ? WHERE telefono = ?", (baneado, telefono))
-
-    if premium is not None:
-        cursor.execute("UPDATE clientes SET premium = ? WHERE telefono = ?", (premium, telefono))
-
-    if vencido is not None:
-        cursor.execute("UPDATE clientes SET vencido = ? WHERE telefono = ?", (vencido, telefono))
-
-    conn.commit()
-    conn.close()
-
-    return {
-        "actualizado": True,
-        "telefono": telefono
+    clientes[nombre] = {
+        "saldo": data.get("saldo", 0),
+        "premium": data.get("premium", False),
+        "deudas": data.get("deudas", False),
+        "baneado": data.get("baneado", False)
     }
 
-# =========================
-# LISTAR CLIENTES
-# =========================
+    return {"creado": True, "cliente": clientes[nombre]}
 
-@app.get("/listar_clientes")
-def listar_clientes():
-    conn = sqlite3.connect("clientes.db")
-    cursor = conn.cursor()
+# -----------------------------------
+# VALIDAR RETIRO
+# -----------------------------------
 
-    cursor.execute("SELECT * FROM clientes")
-    clientes = cursor.fetchall()
+@app.post("/validar")
+async def validar_retiro(data: dict):
+    nombre = data.get("nombre")
 
-    conn.close()
+    if nombre not in clientes:
+        return {"aprobado": False, "motivo": "Cliente no existe"}
 
-    resultado = []
+    cliente = clientes[nombre]
 
-    for cliente in clientes:
-        resultado.append({
-            "telefono": cliente[0],
-            "activo": cliente[1],
-            "baneado": cliente[2],
-            "premium": cliente[3],
-            "vencido": cliente[4]
-        })
+    # PRIORIDAD 1: baneado
+    if cliente["baneado"]:
+        return {"aprobado": False, "motivo": "Cliente baneado"}
 
-    return resultado
+    # PRIORIDAD 2: saldo suficiente
+    if cliente["saldo"] <= 50:
+        return {"aprobado": False, "motivo": "Saldo insuficiente"}
 
-# =========================
-# MOTOR DE VALIDACIÓN
-# =========================
+    # PRIORIDAD 3: deudas
+    if cliente["deudas"] and not cliente["premium"]:
+        return {"aprobado": False, "motivo": "Tiene deudas y no es premium"}
 
-def validar_acceso(telefono):
-    conn = sqlite3.connect("clientes.db")
-    cursor = conn.cursor()
+    return {"aprobado": True, "motivo": "Puede retirar dinero"}
 
-    cursor.execute("SELECT * FROM clientes WHERE telefono = ?", (telefono,))
-    cliente = cursor.fetchone()
+# -----------------------------------
+# WEBHOOK WHATSAPP (Twilio)
+# -----------------------------------
 
-    conn.close()
+@app.post("/webhook")
+async def recibir_mensaje(request: Request):
+    form = await request.form()
+    mensaje = form.get("Body")
+    numero = form.get("From")
 
-    if not cliente:
-        return {
-            "aprobado": False,
-            "motivo": "Cliente no existe"
-        }
+    print(f"Mensaje recibido de {numero}: {mensaje}")
 
-    telefono, activo, baneado, premium, vencido = cliente
-
-    if baneado:
-        return {
-            "aprobado": False,
-            "motivo": "Usuario baneado"
-        }
-
-    if not activo:
-        return {
-            "aprobado": False,
-            "motivo": "Usuario inactivo"
-        }
-
-    if vencido:
-        return {
-            "aprobado": False,
-            "motivo": "Suscripción vencida"
-        }
-
-    return {
-        "aprobado": True,
-        "motivo": "Acceso concedido"
-    }
-
-# =========================
-# ENDPOINT VALIDAR
-# =========================
-
-@app.get("/validar")
-def validar(telefono: str):
-    return validar_acceso(telefono)
+    return PlainTextResponse("OK")
