@@ -61,7 +61,7 @@ async def validar_retiro(data: dict):
     # PRIORIDAD 3: deudas
     if cliente["deudas"] and not cliente["premium"]:
         return {"aprobado": False, "motivo": "Tiene deudas y no es premium"}
-
+  
     return {"aprobado": True, "motivo": "Puede retirar dinero"}
 
 # -----------------------------------
