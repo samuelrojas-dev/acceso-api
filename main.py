@@ -1,26 +1,33 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, Response
+from twilio.twiml.messaging_response import MessagingResponse
 
 app = FastAPI()
 
-# Base de datos en memoria (temporal)
+# =====================================================
+# BASE DE DATOS TEMPORAL EN MEMORIA
+# =====================================================
+
 clientes = {}
 
-# -----------------------------------
+# =====================================================
 # HOME
-# -----------------------------------
+# =====================================================
 
 @app.get("/")
 def home():
     return {"mensaje": "API AccessCheck funcionando correctamente"}
 
-# -----------------------------------
+# =====================================================
 # CREAR CLIENTE
-# -----------------------------------
+# =====================================================
 
 @app.post("/crear")
 async def crear_cliente(data: dict):
     nombre = data.get("nombre")
+
+    if not nombre:
+        return {"creado": False, "error": "Debe enviar nombre"}
 
     if nombre in clientes:
         return JSONResponse(
@@ -37,9 +44,9 @@ async def crear_cliente(data: dict):
 
     return {"creado": True, "cliente": clientes[nombre]}
 
-# -----------------------------------
+# =====================================================
 # VALIDAR RETIRO
-# -----------------------------------
+# =====================================================
 
 @app.post("/validar")
 async def validar_retiro(data: dict):
@@ -50,23 +57,23 @@ async def validar_retiro(data: dict):
 
     cliente = clientes[nombre]
 
-    # PRIORIDAD 1: baneado
+    # PRIORIDAD 1 → baneado
     if cliente["baneado"]:
         return {"aprobado": False, "motivo": "Cliente baneado"}
 
-    # PRIORIDAD 2: saldo suficiente
+    # PRIORIDAD 2 → saldo suficiente (>50)
     if cliente["saldo"] <= 50:
         return {"aprobado": False, "motivo": "Saldo insuficiente"}
 
-    # PRIORIDAD 3: deudas
+    # PRIORIDAD 3 → deudas
     if cliente["deudas"] and not cliente["premium"]:
         return {"aprobado": False, "motivo": "Tiene deudas y no es premium"}
-  
+
     return {"aprobado": True, "motivo": "Puede retirar dinero"}
 
-# -----------------------------------
-# WEBHOOK WHATSAPP (Twilio)
-# -----------------------------------
+# =====================================================
+# WEBHOOK WHATSAPP (TWILIO)
+# =====================================================
 
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
@@ -76,4 +83,32 @@ async def recibir_mensaje(request: Request):
 
     print(f"Mensaje recibido de {numero}: {mensaje}")
 
-    return PlainTextResponse("OK")
+    respuesta = MessagingResponse()
+
+    # Si el usuario escribe "validar Samuel"
+    if mensaje and mensaje.lower().startswith("validar"):
+        partes = mensaje.split()
+
+        if len(partes) < 2:
+            respuesta.message("Debes escribir: validar NOMBRE")
+        else:
+            nombre = partes[1]
+
+            if nombre not in clientes:
+                respuesta.message("Cliente no existe")
+            else:
+                cliente = clientes[nombre]
+
+                if cliente["baneado"]:
+                    respuesta.message("❌ Cliente baneado")
+                elif cliente["saldo"] <= 50:
+                    respuesta.message("❌ Saldo insuficiente")
+                elif cliente["deudas"] and not cliente["premium"]:
+                    respuesta.message("❌ Tiene deudas y no es premium")
+                else:
+                    respuesta.message("✅ Puede retirar dinero")
+
+    else:
+        respuesta.message("Escribe: validar TU_NOMBRE")
+
+    return Response(content=str(respuesta), media_type="application/xml")
